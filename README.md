@@ -99,7 +99,7 @@ pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-In another terminal, from `frontend/`, run `npm install` and `npm run dev`. Open `http://localhost:5173`. Use the demo account and **Load samples** to see classification without connecting a mailbox. New rows show up in the Supabase Table Editor.
+In another terminal, from `frontend/`, run `npm install` and `npm run dev`. Open `http://localhost:5173`. The dashboard calls the deployed API at `https://email-classifier-5puo.onrender.com` (`frontend/.env.development`). Use the demo account and **Load samples** to see classification without connecting a mailbox. New rows show up in the Supabase Table Editor.
 
 Docker Compose runs the API, workers, and local Redis against that same Supabase URL:
 

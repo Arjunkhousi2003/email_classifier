@@ -36,6 +36,52 @@ def _body(message: email.message.Message) -> str:
     return payload.decode(charset, errors="replace")[:BODY_LIMIT]
 
 
+def _error_text(exc: BaseException) -> str:
+    if exc.args and isinstance(exc.args[0], bytes):
+        return exc.args[0].decode("utf-8", errors="replace")
+    return str(exc)
+
+
+def _provider_error(exc: imaplib.IMAP4.error) -> ProviderError:
+    text = _error_text(exc).lower()
+    if any(word in text for word in ("auth", "login", "credential", "invalid", "password")):
+        return ProviderError(
+            "The mail server rejected this password. Gmail, Outlook, Yahoo, and iCloud need an app password from the account security page, not the password you use on the website."
+        )
+    return ProviderError("The mail server refused the request")
+
+
+def _connect(host: str, port: int, use_ssl: bool) -> imaplib.IMAP4:
+    try:
+        if use_ssl:
+            return imaplib.IMAP4_SSL(host, port, timeout=30)
+        return imaplib.IMAP4(host, port, timeout=30)
+    except OSError as exc:
+        raise ProviderError(f"Could not reach the mail server at {host}") from exc
+
+
+def verify_login(
+    host: str,
+    username: str,
+    password: str,
+    port: int = 993,
+    use_ssl: bool = True,
+) -> None:
+    """Confirm the mailbox accepts this email and password before anything is stored."""
+    client: imaplib.IMAP4 | None = None
+    try:
+        client = _connect(host, port, use_ssl)
+        client.login(username, password)
+    except imaplib.IMAP4.error as exc:
+        raise _provider_error(exc) from exc
+    finally:
+        if client is not None:
+            try:
+                client.logout()
+            except Exception:
+                pass
+
+
 def fetch_messages(
     host: str,
     username: str,
@@ -46,7 +92,7 @@ def fetch_messages(
 ) -> list[dict]:
     client: imaplib.IMAP4 | None = None
     try:
-        client = imaplib.IMAP4_SSL(host, port) if use_ssl else imaplib.IMAP4(host, port)
+        client = _connect(host, port, use_ssl)
         client.login(username, password)
         status, _ = client.select("INBOX", readonly=True)
         if status != "OK":
@@ -94,9 +140,7 @@ def fetch_messages(
             )
         return messages
     except imaplib.IMAP4.error as exc:
-        raise ProviderError("IMAP login or fetch failed") from exc
-    except OSError as exc:
-        raise ProviderError("Could not reach the IMAP server") from exc
+        raise _provider_error(exc) from exc
     finally:
         if client is not None:
             try:

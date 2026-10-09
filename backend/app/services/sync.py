@@ -135,6 +135,8 @@ def sync_user(db: Session, user: User, limit: int = 25) -> dict:
             created += new
         except (ProviderError, ValueError) as exc:
             errors.append(str(exc))
+    if not user.oauth_credentials and not user.imap_accounts:
+        errors.append("Connect a mailbox with its email and app password before fetching mail.")
     for account in user.imap_accounts:
         try:
             messages = fetch_imap(

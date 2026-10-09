@@ -25,9 +25,18 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Email Classifier", version="0.1.0", lifespan=lifespan)
+allowed_origins = list(
+    dict.fromkeys(
+        [
+            settings.frontend_url,
+            "http://localhost:5173",
+            settings.api_public_url,
+        ]
+    )
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url, "http://localhost:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

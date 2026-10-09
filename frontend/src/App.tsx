@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Category,
+  FetchResult,
   MailItem,
   SessionUser,
   api,
@@ -51,8 +52,10 @@ export function App() {
   const [selected, setSelected] = useState<MailItem | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [mailbox, setMailbox] = useState({ email: "", password: "", host: "" });
   const [emailInput, setEmailInput] = useState("you@example.com");
   const [imap, setImap] = useState({ host: "", username: "", password: "", port: "993" });
+  const pendingFetch = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -100,7 +103,29 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    refreshInbox().catch((err: Error) => setError(err.message));
+    let cancelled = false;
+    const shouldFetch = pendingFetch.current;
+    pendingFetch.current = false;
+    (async () => {
+      try {
+        if (shouldFetch) {
+          setBusy("Fetching mail");
+          const result = await api<FetchResult>("/fetch-emails", {
+            method: "POST",
+            body: JSON.stringify({ limit: 50 }),
+          });
+          if (result.errors.length) throw new Error(result.errors.join(" "));
+        }
+        if (!cancelled) await refreshInbox();
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Something went wrong");
+      } finally {
+        if (!cancelled) setBusy("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
     // Load once when the session becomes available. Search and category changes call refreshInbox directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
@@ -121,6 +146,23 @@ export function App() {
     } finally {
       setBusy("");
     }
+  }
+
+  async function onMailbox(event: FormEvent) {
+    event.preventDefault();
+    await run("Checking mailbox", async () => {
+      const body = await api<{ access_token: string }>("/auth/mailbox", {
+        method: "POST",
+        body: JSON.stringify({
+          email: mailbox.email,
+          password: mailbox.password,
+          host: mailbox.host.trim() || undefined,
+        }),
+      });
+      pendingFetch.current = true;
+      saveToken(body.access_token);
+      setToken(body.access_token);
+    });
   }
 
   async function onDemo(event: FormEvent) {
@@ -187,22 +229,58 @@ export function App() {
           <p className="eyebrow">Inbox sorting</p>
           <h1>Email Classifier</h1>
           <p className="lede">
-            Connect Gmail or IMAP, then sort mail into Payment, Spam, Promotions, and General.
+            Sign in with the mailbox you want to read. Recent messages are fetched and sorted into Payment, Spam, Promotions, and General.
           </p>
           {error && <p className="error">{error}</p>}
-          <form onSubmit={onDemo} className="stack">
+          <form onSubmit={onMailbox} className="stack">
+            <label>
+              Email
+              <input
+                value={mailbox.email}
+                onChange={(event) => setMailbox({ ...mailbox, email: event.target.value })}
+                type="email"
+                autoComplete="username"
+                placeholder="you@gmail.com"
+                required
+              />
+            </label>
+            <label>
+              App password
+              <input
+                value={mailbox.password}
+                onChange={(event) => setMailbox({ ...mailbox, password: event.target.value })}
+                type="password"
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            <label>
+              Mail server
+              <input
+                value={mailbox.host}
+                onChange={(event) => setMailbox({ ...mailbox, host: event.target.value })}
+                placeholder="Optional. Gmail, Outlook, and Yahoo are detected."
+              />
+            </label>
+            <button type="submit" disabled={Boolean(busy)}>
+              {busy || "Connect and fetch mail"}
+            </button>
+          </form>
+          <p className="hint">
+            Gmail, Outlook, Yahoo, and iCloud reject the website password. Create an app password in that account’s security settings and paste it here. The app only reads mail.
+          </p>
+          <form onSubmit={onDemo} className="stack demo">
             <label>
               Demo account
               <input value={emailInput} onChange={(event) => setEmailInput(event.target.value)} type="email" required />
             </label>
-            <button type="submit" disabled={Boolean(busy)}>
-              {busy || "Continue with demo inbox"}
+            <button type="submit" className="secondary" disabled={Boolean(busy)}>
+              Continue with sample inbox
             </button>
           </form>
-          <button type="button" className="secondary" onClick={onGmail} disabled={Boolean(busy)}>
-            Connect Gmail
+          <button type="button" className="ghost" onClick={onGmail} disabled={Boolean(busy)}>
+            Connect with Google instead
           </button>
-          <p className="hint">Gmail needs a Google OAuth client in the API environment. The demo inbox works without it.</p>
         </section>
       </main>
     );
@@ -216,7 +294,11 @@ export function App() {
           <strong>{user.email}</strong>
         </div>
         <div className="top-actions">
-          <button type="button" onClick={() => run("Fetching", async () => { await api("/fetch-emails", { method: "POST", body: JSON.stringify({ limit: 25 }) }); await refreshInbox(); })} disabled={Boolean(busy)}>
+          <button type="button" onClick={() => run("Fetching", async () => {
+            const result = await api<FetchResult>("/fetch-emails", { method: "POST", body: JSON.stringify({ limit: 50 }) });
+            if (result.errors.length) throw new Error(result.errors.join(" "));
+            await refreshInbox();
+          })} disabled={Boolean(busy)}>
             Fetch mail
           </button>
           <button type="button" className="secondary" onClick={() => run("Classifying", async () => { await api("/filter-emails", { method: "POST", body: JSON.stringify({}) }); await refreshInbox(); })} disabled={Boolean(busy)}>
@@ -252,13 +334,16 @@ export function App() {
             </button>
           ))}
           <form onSubmit={onImap} className="imap">
-            <p>IMAP fallback</p>
-            <input placeholder="Host" value={imap.host} onChange={(event) => setImap({ ...imap, host: event.target.value })} required />
-            <input placeholder="Username" value={imap.username} onChange={(event) => setImap({ ...imap, username: event.target.value })} required />
-            <input placeholder="Password" type="password" value={imap.password} onChange={(event) => setImap({ ...imap, password: event.target.value })} required />
+            <p>Add another mailbox</p>
+            <input placeholder="Email" value={imap.username} onChange={(event) => setImap({ ...imap, username: event.target.value })} required />
+            <input placeholder="App password" type="password" value={imap.password} onChange={(event) => setImap({ ...imap, password: event.target.value })} required />
+            <input placeholder="Mail server (optional)" value={imap.host} onChange={(event) => setImap({ ...imap, host: event.target.value })} />
             <button type="submit" className="secondary" disabled={Boolean(busy)}>Save account</button>
             {user.imap_accounts.length > 0 && (
-              <p className="hint">{user.imap_accounts.length} IMAP account connected. Gmail: {user.gmail_connected ? "yes" : "no"}.</p>
+              <p className="hint">
+                Connected: {user.imap_accounts.map((item) => item.username).join(", ")}
+                {user.gmail_connected ? ". Gmail OAuth is also connected." : "."}
+              </p>
             )}
           </form>
         </aside>

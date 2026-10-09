@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     encryption_key: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    api_public_url: str = "https://email-classifier-5puo.onrender.com"
+    google_redirect_uri: str = "https://email-classifier-5puo.onrender.com/auth/google/callback"
     frontend_url: str = "http://localhost:5173"
     retention_days: int = 365
     fetch_interval_seconds: int = 300

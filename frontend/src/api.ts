@@ -20,6 +20,12 @@ export type MailItem = {
   classification_source: string | null;
 };
 
+export type FetchResult = {
+  fetched: number;
+  created: number;
+  errors: string[];
+};
+
 export type SessionUser = {
   id: string;
   email: string;
@@ -50,12 +56,14 @@ function messageFrom(body: { detail?: unknown }): string {
   return "Request failed";
 }
 
+const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body) headers.set("Content-Type", "application/json");
   const current = readToken();
   if (current) headers.set("Authorization", `Bearer ${current}`);
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (response.status === 401) {
     clearToken();
     throw new Error("Sign in again");

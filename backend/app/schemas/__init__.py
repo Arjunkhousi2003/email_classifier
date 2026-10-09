@@ -10,11 +10,18 @@ class DevLoginRequest(BaseModel):
 
 
 class ImapConnectRequest(BaseModel):
-    host: str
+    host: str | None = None
     port: int = 993
     username: str
     password: str
     use_ssl: bool = True
+
+
+class MailboxLoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=200)
+    host: str | None = None
+    port: int = Field(default=993, ge=1, le=65535)
 
 
 class FetchRequest(BaseModel):

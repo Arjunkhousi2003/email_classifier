@@ -9,10 +9,12 @@ from app.api.deps import create_access_token, create_oauth_state, get_current_us
 from app.config import get_settings
 from app.db.models import Email, ImapAccount, OAuthCredential, Rule, User
 from app.db.session import get_db
-from app.schemas import DevLoginRequest, ImapConnectRequest
+from app.schemas import DevLoginRequest, ImapConnectRequest, MailboxLoginRequest
 from app.services.crypto import encrypt
 from app.services.errors import ProviderError
 from app.services.gmail import authorization_url, exchange_code, profile_email
+from app.services.imap_client import verify_login
+from app.services.imap_hosts import normalize_mailbox_password, resolve_imap_host
 
 router = APIRouter(tags=["auth"])
 
@@ -97,35 +99,75 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)) -> Red
     return RedirectResponse(target)
 
 
+def _save_imap_account(
+    db: Session,
+    user: User,
+    host: str,
+    username: str,
+    password: str,
+    port: int,
+    use_ssl: bool,
+) -> None:
+    existing = db.scalar(
+        select(ImapAccount).where(
+            ImapAccount.user_id == user.id,
+            ImapAccount.host == host,
+            ImapAccount.username == username,
+        )
+    )
+    password_enc = encrypt(password)
+    if existing is None:
+        db.add(
+            ImapAccount(
+                user_id=user.id,
+                host=host,
+                port=port,
+                username=username,
+                password_enc=password_enc,
+                use_ssl=use_ssl,
+            )
+        )
+    else:
+        existing.password_enc = password_enc
+        existing.port = port
+        existing.use_ssl = use_ssl
+
+
+@router.post("/auth/mailbox")
+def mailbox_login(body: MailboxLoginRequest, db: Session = Depends(get_db)) -> dict:
+    """Sign in with the mailbox address and password, then store the verified IMAP account."""
+    address = body.email.strip().lower()
+    password = normalize_mailbox_password(body.password)
+    try:
+        host = (body.host or "").strip() or resolve_imap_host(address)
+        verify_login(host, address, password, port=body.port, use_ssl=True)
+    except ProviderError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    user = db.scalar(select(User).where(User.email == address, User.deleted_at.is_(None)))
+    if user is None:
+        user = User(email=address, name=address.split("@")[0])
+        db.add(user)
+        db.flush()
+    _save_imap_account(db, user, host, address, password, body.port, True)
+    db.commit()
+    db.refresh(user)
+    return {"access_token": create_access_token(user.id), "token_type": "bearer", "user": _user_payload(user)}
+
+
 @router.post("/auth/imap")
 def connect_imap(
     body: ImapConnectRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    existing = db.scalar(
-        select(ImapAccount).where(
-            ImapAccount.user_id == user.id,
-            ImapAccount.host == body.host,
-            ImapAccount.username == body.username,
-        )
-    )
-    password_enc = encrypt(body.password)
-    if existing is None:
-        db.add(
-            ImapAccount(
-                user_id=user.id,
-                host=body.host,
-                port=body.port,
-                username=body.username,
-                password_enc=password_enc,
-                use_ssl=body.use_ssl,
-            )
-        )
-    else:
-        existing.password_enc = password_enc
-        existing.port = body.port
-        existing.use_ssl = body.use_ssl
+    username = body.username.strip()
+    password = normalize_mailbox_password(body.password)
+    try:
+        host = (body.host or "").strip() or resolve_imap_host(username)
+        verify_login(host, username, password, port=body.port, use_ssl=body.use_ssl)
+    except ProviderError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    _save_imap_account(db, user, host, username, password, body.port, body.use_ssl)
     db.commit()
     db.refresh(user)
     return _user_payload(user)
