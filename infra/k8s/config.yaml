@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: email-classifier
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: email-classifier-config
+  namespace: email-classifier
+data:
+  DEV_MODE: "false"
+  FRONTEND_URL: "https://mail.example.com"
+  GOOGLE_REDIRECT_URI: "https://mail.example.com/auth/google/callback"
+  RETENTION_DAYS: "365"
+  FETCH_INTERVAL_SECONDS: "300"
+  MODEL_PATH: "/models/classifier.joblib"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: email-classifier-secrets
+  namespace: email-classifier
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql+psycopg2://email:replace-me@postgres:5432/email_classifier"
+  REDIS_URL: "redis://redis:6379/0"
+  JWT_SECRET: "replace-with-a-long-random-string"
+  ENCRYPTION_KEY: "replace-with-a-fernet-key"
+  GOOGLE_CLIENT_ID: ""
+  GOOGLE_CLIENT_SECRET: ""

@@ -1,0 +1,82 @@
+# Render Blueprint: API web service, Celery worker, Celery beat, and Key Value (Redis).
+# Apply from the Render dashboard with New → Blueprint, or connect this repo.
+# Fill DATABASE_URL, ENCRYPTION_KEY, Google OAuth values, and FRONTEND_URL when prompted.
+
+envVarGroups:
+  - name: email-classifier-env
+    envVars:
+      - key: DEV_MODE
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: RETENTION_DAYS
+        value: "365"
+      - key: FETCH_INTERVAL_SECONDS
+        value: "300"
+      - key: MODEL_PATH
+        value: models/classifier.joblib
+
+services:
+  - type: keyvalue
+    name: email-classifier-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: email-classifier-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: email-classifier-env
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: email-classifier-redis
+          property: connectionString
+
+  - type: worker
+    name: email-classifier-worker
+    runtime: python
+    rootDir: backend
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    envVars:
+      - fromGroup: email-classifier-env
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: email-classifier-redis
+          property: connectionString
+
+  - type: worker
+    name: email-classifier-beat
+    runtime: python
+    rootDir: backend
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_app beat --loglevel=info
+    envVars:
+      - fromGroup: email-classifier-env
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: email-classifier-redis
+          property: connectionString
